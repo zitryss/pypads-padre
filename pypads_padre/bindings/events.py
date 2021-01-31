@@ -8,6 +8,7 @@ from pypads_padre.injections.loggers.decision_tracking import SingleInstanceILF,
     DecisionsTorchILF
 from pypads_padre.injections.loggers.estimator import EstimatorILF
 from pypads_padre.injections.loggers.metric import MetricTorch
+from pypads_padre.injections.loggers.roc_curve import RocILF
 
 # Extended mappings. We allow to log parameters, output or input, datasets
 DEFAULT_PADRE_LOGGING_FNS = {
@@ -20,5 +21,6 @@ DEFAULT_PADRE_LOGGING_FNS = {
     "splits": [SplitILF(),SplitILFTorch()],
     # "doc": DocExtractionILF(),
     "metric": [MetricTorch()],
-    "estimator": EstimatorILF()
+    "estimator": EstimatorILF(),
+    "roc": RocILF()
 }
