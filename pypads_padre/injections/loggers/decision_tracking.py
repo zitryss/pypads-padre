@@ -120,12 +120,12 @@ class SingleInstanceILF(InjectionLogger):
 
         preds = _pypads_result
         if pads.cache.run_exists("predictions"):
-            preds = pads.cache.run_pop("predictions")
+            preds = pads.cache.run_get("predictions")
 
         # check if there is info about decision scores
         probabilities = None
         if pads.cache.run_exists("probabilities"):
-            probabilities = pads.cache.run_pop("probabilities")
+            probabilities = pads.cache.run_get("probabilities")
 
         # check if there is info on truth values
         targets = None
