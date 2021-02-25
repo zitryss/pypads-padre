@@ -5,10 +5,12 @@ from pydantic import BaseModel
 from pypads.app.env import InjectionLoggerEnv
 from pypads.app.injections.injection import InjectionLogger
 from pypads.app.injections.tracked_object import TrackedObject
+from pypads.app.pypads import get_current_pads
 from pypads.model.logger_output import OutputModel, TrackedObjectModel
 from pypads.model.models import IdReference
 from pypads.utils.logging_util import FileFormats
-from sklearn.metrics import roc_curve, auc
+
+from pypads_padre.concepts.util import _len
 
 
 class RocTO(TrackedObject):
@@ -18,6 +20,7 @@ class RocTO(TrackedObject):
         description: str = "ROC description"
         tpr: List[float] = []
         fpr: List[float] = []
+        chart: str = ""
 
     @classmethod
     def get_model_cls(cls) -> Type[BaseModel]:
@@ -25,7 +28,9 @@ class RocTO(TrackedObject):
 
 
 class RocILF(InjectionLogger):
-    class RocILFOutput(OutputModel):  # Is it supposed to be a nested class?
+    _dependencies = {"sklearn", "pandas", "altair"}
+
+    class RocILFOutput(OutputModel):
         roc: Optional[IdReference] = None
 
         class Config:
@@ -38,58 +43,72 @@ class RocILF(InjectionLogger):
     def __post__(self, ctx, *args, _pypads_env: InjectionLoggerEnv,
                  _pypads_artifact_fallback: Optional[FileFormats] = None, _logger_call,
                  _logger_output, _pypads_result,
-                 **kwargs):  # Why the order of parameters changes from logger to logger?
-        # pr = _pypads_result  # holds returned value of the function being tracked
-        # lo = _logger_output  # RocILFOutput initialized with the ref to RocTO
+                 **kwargs):
 
-        from pypads.app.pypads import get_current_pads
+        from sklearn.preprocessing import label_binarize
+        from sklearn.metrics import roc_curve
+        import pandas as pd
+        import altair as alt
+
         pads = get_current_pads()
 
         preds = _pypads_result
         if pads.cache.run_exists("predictions"):
-            preds = pads.cache.run_pop("predictions")
+            preds = pads.cache.run_get("predictions")
 
-        # check if there is info about decision scores
-        probabilities = None
-        if pads.cache.run_exists("probabilities"):
-            probabilities = pads.cache.run_pop("probabilities")
-
-        # check if there is info on truth values
-        targets = None  # labels
+        targets = None
         if pads.cache.run_exists("targets"):
             targets = pads.cache.run_get("targets")
+        if targets is None:
+            return
 
+        classes = np.unique(targets)
+
+        mode = None
+        current_split = None
+        if pads.cache.run_exists("current_split"):
+            mode = pads.cache.get("tracking_mode", "single")
+            split_id = pads.cache.run_get("current_split")
+            splitter = pads.cache.run_get(pads.cache.run_get("split_tracker"))
+            splits = splitter.get("output").splits.splits
+            current_split = splits.get(str(split_id), None)
+        if mode == "multiple" and _len(preds) == _len(targets):
+            return
+        if current_split is None:
+            return
+        if current_split.test_set is None:
+            return
+
+        truth = []
+        for instance in current_split.test_set:
+            truth.append(targets[instance])
+        if len(truth) == 0:
+            return
+
+        truth = label_binarize(truth, classes=classes)
+
+        probabilities = None
+        if pads.cache.run_exists("probabilities"):
+            probabilities = pads.cache.run_get("probabilities")
+        if probabilities is None:
+            return
+
+        fpr_mean = [0 for _ in range(len(classes))]
+        tpr_mean = [0 for _ in range(len(classes))]
+        for i in range(len(classes)):
+            fpr, tpr, thresholds = roc_curve(truth[:, i], probabilities[:, i])
+            fpr_mean = [f + fpr[j] / len(classes) for j, f in enumerate(fpr_mean)]
+            tpr_mean = [t + tpr[j] / len(classes) for j, t in enumerate(tpr_mean)]
+
+        roc_df = pd.DataFrame()
+        roc_df['fpr'] = fpr_mean
+        roc_df['tpr'] = tpr_mean
+        chart = alt.Chart(roc_df).mark_line(color='red').encode(
+            alt.X('fpr', title="false positive rate"),
+            alt.Y('tpr', title="true positive rate"))
 
         roc_to = RocTO(parent=_logger_output)
-
-        new_preds = []
-        fpr = dict()
-        tpr = dict()
-        roc_auc = dict()
-        for i in range(len(probabilities)):  # || len(preds)
-            fpr[i], tpr[i], _ = roc_curve(preds[:, i], probabilities[i][:, 1])
-            new_preds.append(probabilities[i][:, 1])
-            roc_auc[i] = auc(fpr[i], tpr[i])
-
-        fpr["micro"], tpr["micro"], _ = roc_curve(np.ravel(preds), np.ravel(new_preds))
-        roc_auc["micro"] = auc(fpr["micro"], tpr["micro"])
-
-        roc_to.tpr = tpr["micro"].tolist()
-        roc_to.fpr = fpr["micro"].tolist()
-
-        roc_to.value = "hello, world!"
-
+        roc_to.fpr = fpr_mean
+        roc_to.tpr = tpr_mean
+        roc_to.chart = chart.to_json()
         _logger_output.roc = roc_to.store()
-
-
-
-        # Many splits
-        # decisions = RocTO(split_id=uuid.UUID(split_id), parent=_logger_output)
-        # _logger_output.individual_decisions.append(decisions.store())
-        # store() function returns a reference to where it was stored
-
-        # One split
-        # decisions = RocTO(split_id=split_id, parent=_logger_output)
-        # _logger_output.individual_decisions = decisions.store()
-
-        # probabilities, predictions, truth_values
