@@ -108,7 +108,10 @@ class RocILF(InjectionLogger):
         roc_df['tpr'] = tpr_mean
         chart = alt.Chart(roc_df).mark_line(color='red').encode(
             alt.X('fpr', title="false positive rate"),
-            alt.Y('tpr', title="true positive rate"))
+            alt.Y('tpr', title="true positive rate")).properties(
+            width=200,
+            height=150
+        )
 
         roc_to = RocTO(parent=_logger_output)
         roc_to.fpr = fpr_mean
