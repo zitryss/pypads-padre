@@ -96,9 +96,12 @@ class RocILF(InjectionLogger):
         fpr_mean = [0 for _ in range(len(classes))]
         tpr_mean = [0 for _ in range(len(classes))]
         for i in range(len(classes)):
-            fpr, tpr, thresholds = roc_curve(truth[:, i], probabilities[:, i])
-            fpr_mean = [f + fpr[j] / len(classes) for j, f in enumerate(fpr_mean)]
-            tpr_mean = [t + tpr[j] / len(classes) for j, t in enumerate(tpr_mean)]
+            try:
+                fpr, tpr, thresholds = roc_curve(truth[:, i], probabilities[:, i])
+                fpr_mean = [f + fpr[j] / len(classes) for j, f in enumerate(fpr_mean)]
+                tpr_mean = [t + tpr[j] / len(classes) for j, t in enumerate(tpr_mean)]
+            except IndexError:
+                continue
 
         roc_df = pd.DataFrame()
         roc_df['fpr'] = fpr_mean
