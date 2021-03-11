@@ -1,3 +1,4 @@
+import uuid
 from typing import Type, Optional, List
 
 import numpy as np
@@ -10,8 +11,6 @@ from pypads.model.logger_output import OutputModel, TrackedObjectModel
 from pypads.model.models import IdReference
 from pypads.utils.logging_util import FileFormats
 
-from pypads_padre.concepts.util import _len
-
 
 class RocTO(TrackedObject):
     class RocTOModel(TrackedObjectModel):
@@ -21,6 +20,7 @@ class RocTO(TrackedObject):
         tpr: List[float] = []
         fpr: List[float] = []
         chart: str = ""
+        split_id: str = ""
 
     @classmethod
     def get_model_cls(cls) -> Type[BaseModel]:
@@ -52,10 +52,6 @@ class RocILF(InjectionLogger):
 
         pads = get_current_pads()
 
-        preds = _pypads_result
-        if pads.cache.run_exists("predictions"):
-            preds = pads.cache.run_get("predictions")
-
         targets = None
         if pads.cache.run_exists("targets"):
             targets = pads.cache.run_get("targets")
@@ -66,55 +62,113 @@ class RocILF(InjectionLogger):
 
         mode = None
         current_split = None
+        split_id = None
+        splits = None
         if pads.cache.run_exists("current_split"):
             mode = pads.cache.get("tracking_mode", "single")
             split_id = pads.cache.run_get("current_split")
             splitter = pads.cache.run_get(pads.cache.run_get("split_tracker"))
             splits = splitter.get("output").splits.splits
             current_split = splits.get(str(split_id), None)
-        if mode == "multiple" and _len(preds) == _len(targets):
+        if mode is None:
             return
         if current_split is None:
             return
-        if current_split.test_set is None:
+        if split_id is None:
+            return
+        if splits is None:
             return
 
-        truth = []
-        for instance in current_split.test_set:
-            truth.append(targets[instance])
-        if len(truth) == 0:
-            return
+        if mode == "single":
+            if current_split is None:
+                return
+            if current_split.test_set is None:
+                return
 
-        truth = label_binarize(truth, classes=classes)
+            truth = []
+            for instance in current_split.test_set:
+                truth.append(targets[instance])
+            if len(truth) == 0:
+                return
 
-        probabilities = None
-        if pads.cache.run_exists("probabilities"):
-            probabilities = pads.cache.run_get("probabilities")
-        if probabilities is None:
-            return
+            truth = label_binarize(truth, classes=classes)
 
-        fpr_mean = [0 for _ in range(len(classes))]
-        tpr_mean = [0 for _ in range(len(classes))]
-        for i in range(len(classes)):
-            try:
-                fpr, tpr, thresholds = roc_curve(truth[:, i], probabilities[:, i])
-                fpr_mean = [f + fpr[j] / len(classes) for j, f in enumerate(fpr_mean)]
-                tpr_mean = [t + tpr[j] / len(classes) for j, t in enumerate(tpr_mean)]
-            except IndexError:
-                continue
+            probabilities = None
+            if pads.cache.run_exists("probabilities"):
+                probabilities = pads.cache.run_get("probabilities")
+            if probabilities is None:
+                return
 
-        roc_df = pd.DataFrame()
-        roc_df['fpr'] = fpr_mean
-        roc_df['tpr'] = tpr_mean
-        chart = alt.Chart(roc_df).mark_line(color='red').encode(
-            alt.X('fpr', title="false positive rate"),
-            alt.Y('tpr', title="true positive rate")).properties(
-            width=200,
-            height=150
-        )
+            fpr_mean = [0 for _ in range(len(classes))]
+            tpr_mean = [0 for _ in range(len(classes))]
+            for i in range(len(classes)):
+                try:
+                    fpr, tpr, thresholds = roc_curve(truth[:, i], probabilities[:, i])
+                    fpr_mean = [f + fpr[j] / len(classes) for j, f in enumerate(fpr_mean)]
+                    tpr_mean = [t + tpr[j] / len(classes) for j, t in enumerate(tpr_mean)]
+                except IndexError:
+                    continue
 
-        roc_to = RocTO(parent=_logger_output)
-        roc_to.fpr = fpr_mean
-        roc_to.tpr = tpr_mean
-        roc_to.chart = chart.to_json()
-        _logger_output.roc = roc_to.store()
+            roc_df = pd.DataFrame()
+            roc_df['fpr'] = fpr_mean
+            roc_df['tpr'] = tpr_mean
+            chart = alt.Chart(roc_df).mark_line(color='red').encode(
+                alt.X('fpr', title="false positive rate"),
+                alt.Y('tpr', title="true positive rate")).properties(
+                width=200,
+                height=150
+            )
+
+            roc_to = RocTO(parent=_logger_output)
+            roc_to.fpr = fpr_mean
+            roc_to.tpr = tpr_mean
+            roc_to.chart = chart.to_json()
+            roc_to.split_id = str(split_id)
+            _logger_output.roc = roc_to.store()
+        elif mode == "multiple":
+            for split_id, split in splits.items():
+                if split is None:
+                    return
+                if split.test_set is None:
+                    return
+
+                truth = []
+                for instance in split.test_set:
+                    truth.append(targets[instance])
+                if len(truth) == 0:
+                    return
+
+                truth = label_binarize(truth, classes=classes)
+
+                probabilities = None
+                if pads.cache.run_exists("probabilities"):
+                    probabilities = pads.cache.run_get("probabilities")
+                if probabilities is None:
+                    return
+
+                fpr_mean = [0 for _ in range(len(classes))]
+                tpr_mean = [0 for _ in range(len(classes))]
+                for i in range(len(classes)):
+                    try:
+                        fpr, tpr, thresholds = roc_curve(truth[:, i], probabilities[:, i])
+                        fpr_mean = [f + fpr[j] / len(classes) for j, f in enumerate(fpr_mean)]
+                        tpr_mean = [t + tpr[j] / len(classes) for j, t in enumerate(tpr_mean)]
+                    except IndexError:
+                        continue
+
+                roc_df = pd.DataFrame()
+                roc_df['fpr'] = fpr_mean
+                roc_df['tpr'] = tpr_mean
+                chart = alt.Chart(roc_df).mark_line(color='red').encode(
+                    alt.X('fpr', title="false positive rate"),
+                    alt.Y('tpr', title="true positive rate")).properties(
+                    width=200,
+                    height=150
+                )
+
+                roc_to = RocTO(parent=_logger_output)
+                roc_to.fpr = fpr_mean
+                roc_to.tpr = tpr_mean
+                roc_to.chart = chart.to_json()
+                roc_to.split_id = str(uuid.UUID(split_id))
+                _logger_output.roc = roc_to.store()
